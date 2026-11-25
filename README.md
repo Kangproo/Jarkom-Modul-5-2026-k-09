@@ -4,7 +4,7 @@
 ### Anggota Kelompok K-09
 | Nama | NRP |
 | :--- | :--- |
-| Sultan Ahmad Maulana Bahyshidqi | `502751070` |
+| Sultan Ahmad Maulana Bahyshidqi | `5027251070` |
 | Muhammad Razzan Azizi Djuhari | `5027251086` |
 
 - **Prefix IP Kelompok:** `10.68.0.0/16`
@@ -18,6 +18,8 @@
 ![Topologi GNS3](assets/topologi_gns3.jpg)
 
 Struktur direktori repositori:
+- [`VLSM_Modul5_K09.xlsx`](VLSM_Modul5_K09.xlsx) — Spreadsheet lengkap VLSM (33 subnet dengan formula otomatis), daftar IP 25 host, mapping interface 17 router, dan tabel routing statis.
+- [`assets/pohon_ip_vlsm.png`](assets/pohon_ip_vlsm.png) — Gambar pohon pembagian IP VLSM (5 subnet jalur `Dummy-Plug` → `Armisael` dilingkari).
 - [`scripts/routers/`](scripts/routers/) — Script `/root/<nama>.sh` untuk seluruh 17 router (`gendo.sh`, `yui.sh`, `hikari.sh`, `asuka.sh`, `fuyutsuki.sh`, `shigeru.sh`, `mari.sh`, `rei.sh`, `shinji.sh`, `kaworu.sh`, `kensuke.sh`, `ritsuko.sh`, `kaji.sh`, `misato.sh`, `maya.sh`, `toji.sh`, `makoto.sh`).
 - [`scripts/hosts/`](scripts/hosts/) — Script `/root/<nama>.sh` untuk layanan host (`casper.sh`, `balthasar.sh`, `melchior.sh`, `pen-pen.sh`, `tokyo3-core.sh`).
 - [`configs/routers/`](configs/routers/) — Konfigurasi `/etc/network/interfaces` untuk 17 router.
