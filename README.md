@@ -1,6 +1,12 @@
 # Laporan Resmi Praktikum Modul 5 — Komunikasi Data & Jaringan Komputer 2026
 ## *Operation Geofront* (Soal 1 – Soal 10)
 
+### Anggota Kelompok K-09
+| Nama | NRP |
+| :--- | :--- |
+| Sultan Ahmad Maulana Bahyshidqi | `502751070` |
+| Muhammad Razzan Azizi Djuhari | `5027251086` |
+
 - **Prefix IP Kelompok:** `10.68.0.0/16`
 - **Image Docker:** `ardhptr21/debinet:latest`
 - **Simulator:** GNS3
@@ -72,6 +78,11 @@ Pembagian IP dari prefix `10.68.0.0/16` dilakukan dengan metode VLSM dari kebutu
 
 #### Pohon Pembagian IP
 
+![Pohon Pembagian IP VLSM](assets/pohon_ip_vlsm.png)
+
+<details>
+<summary>Versi Diagram Mermaid</summary>
+
 ```mermaid
 flowchart TD
     R["10.68.0.0/21 (2048 IP)"]
@@ -132,6 +143,8 @@ flowchart TD
     style E6 fill:#ffcccc,stroke:#cc0000,stroke-width:3px
     style E7 fill:#ffcccc,stroke:#cc0000,stroke-width:3px
 ```
+
+</details>
 
 #### Penjelasan Hitungan Satu Subnet (`Switch-Garden`)
 - `Garden-Staff` membutuhkan 14 host, ditambah 1 IP gateway (`Shinji`) sehingga total kebutuhan menjadi **15 IP usable**.
