@@ -325,3 +325,322 @@ iptables -t nat -D POSTROUTING -s 10.68.4.64/29 -o eth0 -j RETURN
 Bukti `Unit-01` kembali bisa ping `8.8.8.8`:
 
 ![Soal 10 Unit-01 Ping 8.8.8.8](assets/soal10_unit01_ping_sesudah.png)
+
+
+---
+
+### Soal 11 — Memblokir Ping ke `Magi-Casper`
+
+Pada `Magi-Casper` (`10.68.4.58`), paket ICMP dengan tipe `echo-request` yang masuk dibuang melalui chain `INPUT`. Rule dipasang langsung di Casper agar ping dari node satu switch juga ikut terblokir. ICMP `echo-reply` tidak diblokir sehingga Casper sendiri masih bisa melakukan ping keluar dan layanan TCP `5000` tetap berjalan.
+
+```bash
+iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
+```
+
+Konfigurasi disimpan di [`scripts/hosts/soal11.sh`](scripts/hosts/soal11.sh).
+
+| Ping dari `Magi-Balthasar` ke Casper | Ping dari `Lilith` ke Casper |
+| :---: | :---: |
+| ![Soal 11 Balthasar](assets/soal11_balthasar_ping_casper.png) | ![Soal 11 Lilith](assets/soal11_lilith_ping_casper.png) |
+
+Bukti ping dari Casper ke `Magi-Balthasar` (`10.68.4.59`) dan `Lilith` (`10.68.4.74`) berhasil serta port `5000` masih dalam kondisi `LISTEN`:
+
+![Soal 11 Casper Testing](assets/soal11_casper_testing.png)
+
+---
+
+### Soal 12 — Sabotase Firewall di `Magi-Casper` (`break_fw.sh`)
+
+#### Hasil Diagnostik & 3 Penyebab yang Ditemukan
+
+Setelah menjalankan `break_fw.sh` di Casper, ditemukan 3 penyebab:
+1. **Rule `INPUT -p icmp -j DROP`** — seluruh ICMP dibuang termasuk `echo-reply` dari `8.8.8.8`, sehingga ping keluar tidak mendapat balasan.
+2. **Rule `OUTPUT -p udp --dport 53 -j DROP`** — query DNS lewat UDP port `53` diblokir, sehingga resolusi nama domain untuk kebutuhan APT terganggu.
+3. **Policy `INPUT DROP` tanpa rule untuk `ESTABLISHED,RELATED` dan TCP `5000`** — balasan koneksi yang dimulai Casper ikut dibuang dan koneksi baru dari `Unit-00` ke port `5000` juga tidak diizinkan.
+
+Default route Casper melalui `10.68.4.57` masih benar dan port `5000` masih `LISTEN`, sehingga penyebab pada Casper bukan karena listener mati atau gateway salah.
+
+| Diagnostik Firewall Casper | `Unit-00` Sebelum Perbaikan |
+| :---: | :---: |
+| ![Soal 12 Casper Sebelum](assets/soal12_casper_broken.png) | ![Soal 12 Unit-00 Sebelum](assets/soal12_unit00_before.png) |
+
+#### Perbaikan di `Magi-Casper`
+
+```bash
+iptables -D INPUT -p icmp -j DROP
+iptables -D OUTPUT -p udp --dport 53 -j DROP
+iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -I INPUT 1 -p icmp --icmp-type echo-request -j DROP
+iptables -A INPUT -s 10.68.4.68 -p tcp --dport 5000 -j ACCEPT
+```
+
+Policy `INPUT DROP` tetap dipertahankan. Koneksi baru ke TCP `5000` hanya diizinkan dari `Unit-00` (`10.68.4.68`), sedangkan ping masuk tetap dibuang. Script perbaikan disimpan di [`scripts/hosts/soal12.sh`](scripts/hosts/soal12.sh).
+
+| `Unit-00` Sesudah Perbaikan | Akses dari `Magi-Balthasar` |
+| :---: | :---: |
+| ![Soal 12 Unit-00 Sesudah](assets/soal12_unit00_after.png) | ![Soal 12 Balthasar Ditolak](assets/soal12_balthasar_denied.png) |
+
+TCP `5000` dari Unit-00 berhasil, tetapi ping tetap gagal. Dari Balthasar, ping dan koneksi TCP `5000` sama-sama gagal.
+
+Bukti rule firewall, counter, dan listener Casper sesudah perbaikan:
+
+![Soal 12 Firewall Casper](assets/soal12_casper_final.png)
+
+#### Pengujian Akses Internet
+
+Ping `8.8.8.8` dari Casper kembali berhasil (0% packet loss) dan resolusi DNS ke `deb.debian.org` berjalan normal. APT dapat mengakses repository dan mengambil metadata, sementara verifikasi signature repository security belum tuntas.
+
+![Soal 12 Pengujian Internet dan DNS](assets/soal12_internet_dns_apt_error.png)
+
+---
+
+## Babak 3: Mengamankan MAGI dan Zona Sensitif
+
+### Soal 13 — Pembatasan Akses TCP di `Magi-Balthasar`
+
+Pada `Magi-Balthasar` (`10.68.4.59`) dibuat chain `BALTHASAR_ACCESS` yang hanya dilewati paket TCP dengan tujuan port `5000` dan `5001`. IP yang diizinkan adalah Casper (`10.68.4.58`) dan seluruh Pilot (`10.68.4.66`, `10.68.4.67`, `10.68.4.68`, `10.68.3.130`).
+
+Paket dari IP lainnya ditolak menggunakan `REJECT --reject-with tcp-reset` agar koneksi langsung gagal (`Connection refused`), bukan menunggu timeout. Traffic di luar kedua port tersebut tidak melewati chain ini.
+
+```bash
+iptables -A BALTHASAR_ACCESS -p tcp -j REJECT --reject-with tcp-reset
+iptables -I INPUT 1 -p tcp -m multiport --dports 5000,5001 -j BALTHASAR_ACCESS
+```
+
+Script lengkap: [`scripts/hosts/soal13.sh`](scripts/hosts/soal13.sh).
+
+| `Unit-01` (5000 & 5001) | `Lilith` (5000 & 5001) |
+| :---: | :---: |
+| ![Soal 13 Unit-01 Berhasil](assets/soal13_unit01_accept.png) | ![Soal 13 Lilith Ditolak](assets/soal13_lilith_reject.png) |
+
+| `Magi-Melchior` (Satu Switch) | Counter & Ping Internet Balthasar |
+| :---: | :---: |
+| ![Soal 13 Melchior Ditolak](assets/soal13_melchior_reject.png) | ![Soal 13 Balthasar Testing](assets/soal13_balthasar_testing.png) |
+
+---
+
+### Soal 14 — Pembatasan Jam Kunjungan `Pen-Pen`
+
+Pada `Pen-Pen` (`10.68.3.194`) dibuat chain `PENPEN_TIME` untuk ICMP `echo-request` dan TCP port `80`. Pembatasan menggunakan modul `time` berdasarkan IP sumber. Untuk Pilot dan Staf, rule `ACCEPT` sesuai jadwal diletakkan sebelum rule `DROP` untuk IP yang sama. Terduga Dummy System selalu di-DROP dan node lainnya dikembalikan ke chain `INPUT` menggunakan `RETURN`.
+
+#### Jadwal Kunjungan (WIB & UTC)
+
+| Kelompok | Anggota | WIB | UTC |
+| :--- | :--- | :--- | :--- |
+| Pilot | Unit-01, Unit-02, Unit-00, Sachiel | 08.00–16.00 (Senin–Jumat) | 01.00–09.00 |
+| Staf Geofront | Lilith, Adam | 17.00–23.00 (Setiap hari) | 10.00–16.00 |
+| Terduga Dummy System | Dummy-Plug, Entry-Plug, Spy | Tidak pernah | Tidak pernah |
+| Lainnya | Node di luar kategori di atas | Bebas | Bebas |
+
+Variabel jadwal pada awal [`scripts/hosts/soal14.sh`](scripts/hosts/soal14.sh):
+
+```bash
+PILOT_START="${PILOT_START:-01:00:00}"
+PILOT_STOP="${PILOT_STOP:-09:00:00}"
+PILOT_DAYS="${PILOT_DAYS:-Mon,Tue,Wed,Thu,Fri}"
+STAF_START="${STAF_START:-10:00:00}"
+STAF_STOP="${STAF_STOP:-16:00:00}"
+```
+
+#### Pengujian A — Jadwal Staf Sesuai, Pilot Tidak Sesuai
+
+Untuk pengujian pertama, jam Staf diperlebar menjadi `00:00:00–23:59:59 UTC`, sedangkan jadwal Pilot tetap seperti semula. Hasilnya `Lilith` berhasil, `Unit-01` gagal, dan `Spy` tetap gagal.
+
+| `Unit-01` | `Lilith` |
+| :---: | :---: |
+| ![Soal 14 A Unit-01](assets/soal14_A_unit01_drop.png) | ![Soal 14 A Lilith](assets/soal14_A_lilith_accept.png) |
+
+| `Spy` | Counter `PENPEN_TIME` |
+| :---: | :---: |
+| ![Soal 14 A Spy](assets/soal14_A_spy_drop.png) | ![Soal 14 A Counter](assets/soal14_A_penpen_counter.png) |
+
+#### Pengujian B — Jadwal Pilot Sesuai, Staf Tidak Sesuai
+
+Jam Pilot diubah menjadi `00:00:00–23:59:59 UTC` setiap hari dan jam Staf menjadi `01:00:00–02:00:00 UTC`. Hasilnya `Unit-01` berhasil, `Lilith` gagal, dan `Spy` tetap gagal.
+
+| `Unit-01` | `Lilith` |
+| :---: | :---: |
+| ![Soal 14 B Unit-01](assets/soal14_B_unit01_accept.png) | ![Soal 14 B Lilith](assets/soal14_B_lilith_drop.png) |
+
+| `Spy` | Counter `PENPEN_TIME` |
+| :---: | :---: |
+| ![Soal 14 B Spy](assets/soal14_B_spy_drop.png) | ![Soal 14 B Counter](assets/soal14_B_penpen_counter.png) |
+
+Setelah kedua pengujian selesai, script dijalankan kembali tanpa override variabel untuk mengembalikan jadwal awal.
+
+---
+
+### Soal 15 — Rate Limiting ICMP di `Tokyo3-Core`
+
+Pada `Tokyo3-Core` (`10.68.4.106`) paket `echo-request` yang masuk diarahkan ke chain `ICMP_LIMIT` dengan modul `limit` sebesar `5/second` dan `limit-burst 1`. Paket yang melebihi batas dibuang oleh rule `DROP` di bawahnya. Rule tidak diterapkan pada `echo-reply` maupun chain `OUTPUT`, sehingga ping yang dilakukan Tokyo3-Core sendiri tidak ikut dibatasi.
+
+```bash
+iptables -N ICMP_LIMIT
+iptables -A ICMP_LIMIT -m limit --limit 5/second --limit-burst 1 -j ACCEPT
+iptables -A ICMP_LIMIT -j DROP
+iptables -I INPUT 1 -p icmp --icmp-type echo-request -j ICMP_LIMIT
+```
+
+Script: [`scripts/hosts/soal15.sh`](scripts/hosts/soal15.sh).
+
+Pengujian dari `Lilith` menggunakan `ping -i 0.1 -c 50` menghasilkan 25 paket diterima dan 25 paket hilang (50% packet loss). Counter chain menunjukkan masing-masing 25 paket pada rule `ACCEPT` dan `DROP`.
+
+| Ping Rapat dari `Lilith` | Counter `ICMP_LIMIT` |
+| :---: | :---: |
+| ![Soal 15 Fast Ping](assets/soal15_lilith_fast_ping.png) | ![Soal 15 Counter](assets/soal15_tokyo3_counter.png) |
+
+Pada pengujian ping biasa, 5 paket berhasil diterima seluruhnya (0% packet loss). Ping keluar dari Tokyo3-Core ke `Lilith` dan `8.8.8.8` juga berhasil.
+
+| Ping Biasa dari `Lilith` | Ping Keluar & Listener Tokyo3-Core |
+| :---: | :---: |
+| ![Soal 15 Normal Ping](assets/soal15_lilith_normal_ping.png) | ![Soal 15 Tokyo3-Core](assets/soal15_tokyo3_final.png) |
+
+---
+
+### Soal 16 — Logging & Penolakan Port Sensitif di `Tokyo3-Core`
+
+Traffic TCP dari `Dummy-Plug` (`10.68.4.51`) yang menuju port `22`, `23`, atau `3306` diarahkan ke chain `SCAN_NERV`. Rule pertama mencatat paket dengan prefix `SCAN-NERV: `, kemudian rule kedua menolak koneksi dengan TCP reset. Port `80` dan `8080` tidak ikut diblokir.
+
+```bash
+iptables -N SCAN_NERV
+iptables -A SCAN_NERV -j LOG --log-prefix "SCAN-NERV: "
+iptables -A SCAN_NERV -p tcp -j REJECT --reject-with tcp-reset
+iptables -I INPUT 1 -s 10.68.4.51 -p tcp -m multiport --dports 22,23,3306 -j SCAN_NERV
+```
+
+Script: [`scripts/hosts/soal16.sh`](scripts/hosts/soal16.sh). Chain `ICMP_LIMIT` dari soal 15 tetap dipertahankan.
+
+| Pengujian `Dummy-Plug` | Pengujian `Lilith` |
+| :---: | :---: |
+| ![Soal 16 Dummy-Plug](assets/soal16_dummyplug_testing.png) | ![Soal 16 Lilith](assets/soal16_lilith_testing.png) |
+
+Ketiga port sensitif langsung menghasilkan `Connection refused` dari Dummy-Plug, sementara port `80` dan `8080` berhasil. Counter pada rule `LOG` dan `REJECT` masing-masing naik sebanyak 3 paket.
+
+![Soal 16 Counter Tokyo3-Core](assets/soal16_tokyo3_counter.png)
+
+---
+
+### Soal 17 — Pengalihan Koneksi TCP (DNAT) di `Fuyutsuki`
+
+`Fuyutsuki` merupakan gateway dari Switch-Terminal. Pada chain `PREROUTING` tabel `nat` dipasang rule DNAT untuk semua TCP dari `Magi-Casper` (`10.68.4.58`) yang menuju `Zeruel` (`10.68.4.82`), sehingga IP tujuan diubah menjadi IP `Pen-Pen` (`10.68.3.194`). Port tujuan tetap sama dan ICMP tidak ikut dialihkan.
+
+```bash
+iptables -t nat -A PREROUTING -s 10.68.4.58 -d 10.68.4.82 -p tcp -j DNAT --to-destination 10.68.3.194
+```
+
+Script: [`scripts/routers/soal17.sh`](scripts/routers/soal17.sh).
+
+#### Hasil Pengujian DNAT
+
+Listener TCP `9000` dinyalakan di Pen-Pen dan Zeruel. Casper mengirim pesan `PESAN-CASPER-UNTUK-ZERUEL` ke IP Zeruel pada port `9000`. Pesan diterima oleh Pen-Pen, sementara log Zeruel tetap berukuran 0 byte meskipun listener-nya aktif.
+
+| Pengujian dari `Magi-Casper` | Tabel `conntrack` Fuyutsuki |
+| :---: | :---: |
+| ![Soal 17 Casper](assets/soal17_casper_testing.png) | ![Soal 17 Conntrack](assets/soal17_fuyutsuki_conntrack.png) |
+
+| Pesan Diterima `Pen-Pen` | Log `Zeruel` Kosong |
+| :---: | :---: |
+| ![Soal 17 Pen-Pen](assets/soal17_penpen_received.png) | ![Soal 17 Zeruel](assets/soal17_zeruel_empty.png) |
+
+Pada tabel `conntrack`, koneksi awal tercatat dengan `src=10.68.4.58` dan `dst=10.68.4.82`, sedangkan arah balasannya berasal dari `10.68.3.194`. Karena paket balasan melewati Fuyutsuki kembali, conntrack melakukan translasi balik sehingga dari sisi Casper koneksi tetap terlihat menuju Zeruel. Ping Casper ke Zeruel tetap berhasil.
+
+---
+
+### Soal 18 — Stateful Firewall Zona Monolith & Radar di `Shigeru`
+
+Subnet Monolith (`10.68.4.80/29`) dan Radar (`10.68.4.88/29`) dapat diringkas menjadi `10.68.4.80/28`. Pada `Shigeru`, paket `FORWARD` yang masuk dari sisi Gendou (`eth0`) dengan tujuan prefix tersebut diarahkan ke chain `ZONE_PROTECT`.
+
+```bash
+iptables -N ZONE_PROTECT
+iptables -A ZONE_PROTECT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A ZONE_PROTECT -s 10.68.4.56/29 -p icmp --icmp-type echo-request -j ACCEPT
+iptables -A ZONE_PROTECT -j DROP
+iptables -I FORWARD 1 -i eth0 -d 10.68.4.80/28 -j ZONE_PROTECT
+```
+
+Balasan koneksi yang dimulai dari dalam zona diizinkan oleh `ESTABLISHED,RELATED`. Koneksi baru dari luar zona dibuang kecuali ping dari subnet Terminal (`10.68.4.56/29`). Dengan menggunakan interface `eth0`, subnet luar tidak perlu ditulis satu per satu.
+
+Script: [`scripts/routers/soal18.sh`](scripts/routers/soal18.sh).
+
+| Ping `Casper` ke `Zeruel` | Ping & TCP `Lilith` ke `Zeruel` |
+| :---: | :---: |
+| ![Soal 18 Casper Berhasil](assets/soal18_casper_accept.png) | ![Soal 18 Lilith Gagal](assets/soal18_lilith_drop.png) |
+
+| Akses Keluar dari Monolith (`Zeruel`) | Akses Keluar dari Radar (`Radar-Array`) |
+| :---: | :---: |
+| ![Soal 18 Zeruel](assets/soal18_zeruel_outbound.png) | ![Soal 18 Radar](assets/soal18_radar_outbound.png) |
+
+Bukti counter ketiga rule di Shigeru:
+
+![Soal 18 Counter Shigeru](assets/soal18_shigeru_counter.png)
+
+---
+
+### Soal 19 — Isolasi `Armisael` di Switch-Monolith
+
+`Armisael` (`10.68.4.83`) dan `Zeruel` (`10.68.4.82`) berada pada subnet dan switch yang sama, sehingga paket antara keduanya tidak melewati router `Shigeru`. Pemblokiran menggunakan firewall router saja tidak cukup. Oleh karena itu isolasi dilakukan pada Layer 2 dengan memindahkan access port Armisael ke VLAN `99` yang tidak memiliki gateway maupun anggota lainnya.
+
+| Port Switch-Monolith | Node | VLAN |
+| :---: | :--- | :---: |
+| `e0` | Shigeru | 1 |
+| `e1` | Zeruel | 1 |
+| `e2` | Armisael (`eth0`) | 99 |
+
+| Mapping Port Switch | Konfigurasi VLAN |
+| :---: | :---: |
+| ![Soal 19 Port Armisael](assets/soal19_topology_port2.png) | ![Soal 19 VLAN 99](assets/soal19_switch_isolation.png) |
+
+Konfigurasi dilakukan melalui menu `Configure` pada Switch-Monolith. Setelah VLAN diubah, link Armisael disambungkan ulang pada port yang sama agar perubahan berlaku. Tidak ada perubahan IP maupun firewall di Armisael. Dokumentasi port disimpan di [`configs/soal19_switch-monolith.conf`](configs/soal19_switch-monolith.conf).
+
+#### Hasil Pengujian Sebelum & Sesudah Isolasi
+
+Listener TCP `9000` dijalankan pada Armisael, Zeruel, dan Lilith. Untuk pengujian ke Seele (`8.8.8.8`) digunakan TCP `53`.
+
+| Sebelum Isolasi (`Armisael`) | Sesudah Isolasi (`Armisael`) |
+| :---: | :---: |
+| ![Soal 19 Armisael Sebelum](assets/soal19_armisael_before.png) | ![Soal 19 Armisael Sesudah](assets/soal19_armisael_isolated.png) |
+
+Setelah isolasi, ping dan `nc` dari Armisael menuju Zeruel, Lilith, dan Seele gagal. Ping ke gateway sendiri (`10.68.4.81`) juga gagal. Dari Zeruel, koneksi ke Armisael gagal, tetapi ping dan `nc` ke Lilith dan Seele tetap berhasil.
+
+![Soal 19 Zeruel Testing](assets/soal19_zeruel_testing.png)
+
+---
+
+## Babak Final: Siap Dihancurkan, Siap Dibangun Lagi
+
+### Soal 20 — Backup, Restore & Idempotensi Konfigurasi
+
+Tiga node yang dipilih yaitu `Gendou`, `Fuyutsuki`, dan `Shigeru`. Rule firewall disimpan menggunakan `iptables-save` ke `/root/<nama>.rules`, kemudian seluruh rule iptables termasuk tabel `nat` dihapus. Rute tambahan melalui gateway internal juga dihapus, sedangkan connected route dan default route DHCP pada Gendou tetap dipertahankan.
+
+Pemulihan dilakukan dengan menjalankan kembali `/root/<nama>.sh` untuk routing dan `iptables-restore` untuk firewall. Proses tersebut dilakukan dua kali berturut-turut menggunakan [`scripts/routers/soal20.sh`](scripts/routers/soal20.sh). Hasil `iptables -S`, `iptables -t nat -S`, serta tabel routing dibandingkan menggunakan `diff`.
+
+#### Hasil Restore Pertama & Kedua
+
+| Router | Filter (1 / 2) | NAT (1 / 2) | Routing (1 / 2) |
+| :--- | :---: | :---: | :---: |
+| Gendou | 10 / 10 | 5 / 5 | 31 / 31 |
+| Fuyutsuki | 3 / 3 | 5 / 5 | 7 / 7 |
+| Shigeru | 8 / 8 | 4 / 4 | 5 / 5 |
+
+Jumlah di atas merupakan jumlah baris output, bukan hanya jumlah rule. Tidak ada perbedaan antara restore pertama dan kedua maupun terhadap konfigurasi awal pada ketiga router.
+
+| `Gendou` | `Fuyutsuki` |
+| :---: | :---: |
+| ![Soal 20 Gendou](assets/soal20_gendou_compare.png) | ![Soal 20 Fuyutsuki](assets/soal20_fuyutsuki_compare.png) |
+
+Bukti penghapusan rule dan routing serta dua kali restore pada `Shigeru`:
+
+![Soal 20 Shigeru Restore](assets/soal20_shigeru_restore.png)
+
+#### Pengujian Konektivitas Setelah Pemulihan
+
+Zeruel berhasil ping `8.8.8.8`, ping Lilith, dan `nc` ke Seele pada TCP `53`. Lilith masih bisa ping internet, tetapi ping dan `nc` menuju Zeruel diblokir sesuai firewall zona pada soal 18. Rule DNAT pada Fuyutsuki juga kembali tersedia setelah restore.
+
+| `Zeruel` (Akses Keluar) | `Lilith` (Internet & Akses ke Zona) |
+| :---: | :---: |
+| ![Soal 20 Zeruel](assets/soal20_zeruel_testing.png) | ![Soal 20 Lilith](assets/soal20_lilith_testing.png) |
+
+File backup firewall ketiga router:
+- [`soal20_gendo.rules`](configs/backup/soal20_gendo.rules)
+- [`soal20_fuyutsuki.rules`](configs/backup/soal20_fuyutsuki.rules)
+- [`soal20_shigeru.rules`](configs/backup/soal20_shigeru.rules)
